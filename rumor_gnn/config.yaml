@@ -1,0 +1,58 @@
+# Model Configuration
+model:
+  name: 'gat'  # Options: 'gcn', 'gat', 'sage', 'gin'
+  input_dim: 768  # BERT embedding dimension
+  hidden_dims: [256, 128, 64]
+  num_classes: 2
+  dropout: 0.5
+  heads: 4  # GAT specific
+
+# Training Configuration
+training:
+  epochs: 100
+  batch_size: 32
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  early_stopping:
+    patience: 10
+    min_delta: 0.001
+  lr_scheduler:
+    type: 'reduce_on_plateau'
+    factor: 0.5
+    patience: 5
+    min_lr: 1e-6
+
+# Data Configuration
+data:
+  path: 'data/rumor_dataset.csv'
+  test_size: 0.2
+  random_state: 42
+  max_features: 1000
+  temporal_window: 24  # hours
+
+# Feature Configuration (Ablation Studies)
+features:
+  use_text: true  # BERT embeddings
+  use_graph: true  # Graph structure
+  use_metadata: true  # User metadata
+  use_temporal: true  # Temporal features
+
+# Experiment Configuration
+experiment:
+  name: 'rumor_detection'
+  log_dir: 'logs'
+  checkpoint_dir: 'checkpoints'
+  results_dir: 'results'
+  wandb:
+    project: 'rumor_detection'
+    entity: 'harshilbhatnagar-svkm-s-narsee-monjee-institute-of-manag'
+    enabled: true
+
+# Evaluation Configuration
+evaluation:
+  metrics: ['accuracy', 'precision', 'recall', 'f1', 'roc_auc']
+  visualize:
+    attention: true
+    embeddings: true
+    graph: true
+    confusion_matrix: true 
