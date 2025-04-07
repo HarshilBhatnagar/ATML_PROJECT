@@ -92,18 +92,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## Citation
-
-If you use this code in your research, please cite:
-
-```bibtex
-@misc{rumorgnn2024,
-  author = {Your Name},
-  title = {RumorGNN: Graph Neural Network for Rumor Detection},
-  year = {2024},
-  publisher = {GitHub},
-  url = {https://github.com/yourusername/rumor-gnn}
-}
 ```
 
 ## Contact
