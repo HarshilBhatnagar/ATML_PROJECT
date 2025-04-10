@@ -1,5 +1,5 @@
 """
-Rumor Detection using Graph Neural Networks
+RumorGNN: A Graph Neural Network for Rumor Detection
 """
 
-__version__ = '0.1.0' 
+__version__ = "0.1.0" 

@@ -22,7 +22,8 @@ class Trainer:
             self,
             data_path: str = "data/rumor_dataset.csv",
             model_type: str = "gat",
-            hidden_channels: int = 128,
+            hidden_dim: int = 64,
+            num_heads: int = 4,
             num_layers: int = 2,
             dropout: float = 0.2,
             lr: float = 0.01,
@@ -30,6 +31,7 @@ class Trainer:
             device: str = "cuda" if torch.cuda.is_available() else "cpu"
         ):
         self.device = device
+        self.model_type = model_type
         logger.info(f"Using device: {device}")
         
         # Ensure data_path is a string
@@ -57,16 +59,17 @@ class Trainer:
         if model_type == "gat":
             self.model = GAT(
                 in_channels=in_channels,
-                hidden_channels=hidden_channels,
+                hidden_channels=hidden_dim,
                 out_channels=out_channels,
+                num_heads=num_heads,
                 num_layers=num_layers,
-                heads=4,
-                dropout=dropout
+                dropout=dropout,
+                edge_dim=1
             ).to(device)
         elif model_type == "gcn":
             self.model = GCN(
                 in_channels=in_channels,
-                hidden_channels=hidden_channels,
+                hidden_channels=hidden_dim,
                 out_channels=out_channels,
                 num_layers=num_layers,
                 dropout=dropout
@@ -80,7 +83,13 @@ class Trainer:
             weight_decay=weight_decay
         )
         
-        logger.info(f"Model initialized with {in_channels} input channels")
+        logger.info(f"Initialized {model_type.upper()} model with:")
+        logger.info(f"- Input channels: {in_channels}")
+        logger.info(f"- Hidden dimension: {hidden_dim}")
+        logger.info(f"- Number of heads: {num_heads}")
+        logger.info(f"- Number of layers: {num_layers}")
+        logger.info(f"- Dropout rate: {dropout}")
+        logger.info(f"- Edge dimension: 1")
         
         # Setup experiment tracking
         self.setup_experiment_tracking()
@@ -138,35 +147,75 @@ class Trainer:
         return metrics
     
     def train(self, epochs: int = 100, early_stopping_patience: int = 10, min_delta: float = 0.001):
-        """Train the model with early stopping."""
-        best_val_f1 = 0
+        """Train the model."""
+        best_val_loss = float('inf')
         patience_counter = 0
         
-        for epoch in tqdm(range(epochs), desc='Training'):
+        for epoch in range(epochs):
             # Training
-            train_loss = self.train_epoch()
+            self.model.train()
+            self.optimizer.zero_grad()
             
-            # Evaluation
-            train_metrics = self.evaluate(self.train_data)
-            val_metrics = self.evaluate(self.test_data)
+            # Forward pass with edge attributes
+            out = self.model(
+                self.train_data.x,
+                self.train_data.edge_index,
+                self.train_data.edge_attr
+            )
             
-            # Update learning rate
-            self.scheduler.step(val_metrics['f1'])
+            # Calculate loss
+            loss = F.cross_entropy(out[self.train_data.train_mask], self.train_data.y[self.train_data.train_mask])
+            
+            # Backward pass
+            loss.backward()
+            self.optimizer.step()
+            
+            # Validation
+            self.model.eval()
+            with torch.no_grad():
+                val_out = self.model(
+                    self.test_data.x,
+                    self.test_data.edge_index,
+                    self.test_data.edge_attr
+                )
+                val_loss = F.cross_entropy(val_out[self.test_data.test_mask], self.test_data.y[self.test_data.test_mask])
+            
+            # Calculate metrics
+            train_pred = out.argmax(dim=1)
+            val_pred = val_out.argmax(dim=1)
+            
+            train_metrics = calculate_metrics(
+                train_pred[self.train_data.train_mask],
+                self.train_data.y[self.train_data.train_mask]
+            )
+            val_metrics = calculate_metrics(
+                val_pred[self.test_data.test_mask],
+                self.test_data.y[self.test_data.test_mask]
+            )
             
             # Log metrics
-            self.log_metrics(epoch, train_loss, train_metrics, val_metrics)
+            self.log_metrics(epoch, loss.item(), train_metrics, val_metrics)
             
-            # Check early stopping
-            if val_metrics['f1'] > best_val_f1 + min_delta:
-                best_val_f1 = val_metrics['f1']
+            # Early stopping
+            if val_loss < best_val_loss - min_delta:
+                best_val_loss = val_loss
                 patience_counter = 0
-                self.save_checkpoint('best_model.pt')
+                self.save_checkpoint(f"best_model_epoch_{epoch}.pt")
             else:
                 patience_counter += 1
+                if patience_counter >= early_stopping_patience:
+                    logger.info(f"Early stopping triggered at epoch {epoch}")
+                    break
             
-            if patience_counter >= early_stopping_patience:
-                logger.info(f"Early stopping triggered at epoch {epoch}")
-                break
+            # Log progress
+            if epoch % 10 == 0:
+                logger.info(f"Epoch {epoch}:")
+                logger.info(f"  Train Loss: {loss.item():.4f}")
+                logger.info(f"  Val Loss: {val_loss.item():.4f}")
+                logger.info(f"  Train Metrics: {train_metrics}")
+                logger.info(f"  Val Metrics: {val_metrics}")
+        
+        return train_metrics, val_metrics
     
     def log_metrics(self, epoch: int, train_loss: float, 
                    train_metrics: Dict[str, float], val_metrics: Dict[str, float]):
@@ -199,17 +248,22 @@ def main():
     trainer = Trainer(
         data_path="data/rumor_dataset.csv",
         model_type="gat",
-        hidden_channels=128,
+        hidden_dim=64,
+        num_heads=4,
         num_layers=2,
         dropout=0.2
     )
     
     # Train with custom parameters
-    trainer.train(
+    train_metrics, val_metrics = trainer.train(
         epochs=100,
         early_stopping_patience=10,
         min_delta=0.001
     )
+
+    # Log training metrics
+    logger.info(f"Train Metrics: {train_metrics}")
+    logger.info(f"Val Metrics: {val_metrics}")
 
 if __name__ == '__main__':
     main() 

@@ -3,6 +3,7 @@ import torch.nn.functional as F
 from torch_geometric.nn import GCNConv, GATConv, SAGEConv, GINConv
 from torch.nn import Linear, Sequential, BatchNorm1d, ReLU
 from typing import List, Optional, Union, Dict, Any
+from torch_geometric.utils import add_self_loops
 
 class BaseGNN(torch.nn.Module):
     """Base class for all GNN architectures."""
@@ -113,59 +114,107 @@ class GCN(torch.nn.Module):
         return x
 
 class GAT(torch.nn.Module):
+    """Graph Attention Network with edge features and skip connections."""
+    
     def __init__(
         self,
         in_channels: int,
         hidden_channels: int,
         out_channels: int,
+        num_heads: int = 4,
         num_layers: int = 2,
-        heads: int = 4,
-        dropout: float = 0.2
+        dropout: float = 0.2,
+        edge_dim: int = 1
     ):
         super().__init__()
-        self.convs = torch.nn.ModuleList()
+        self.num_layers = num_layers
+        self.dropout = dropout
+        self.attention_weights = None  # Store attention weights
         
-        # First layer: in_channels -> hidden_channels
-        self.convs.append(
-            GATConv(
-                in_channels=in_channels,
-                out_channels=hidden_channels,
-                heads=heads,
-                dropout=dropout,
-                concat=True
-            )
+        # First layer
+        self.conv1 = GATConv(
+            in_channels=in_channels,
+            out_channels=hidden_channels,
+            heads=num_heads,
+            dropout=dropout,
+            edge_dim=edge_dim,
+            concat=True
         )
         
-        # Hidden layers: hidden_channels*heads -> hidden_channels
+        # Hidden layers
+        self.convs = torch.nn.ModuleList()
         for _ in range(num_layers - 2):
             self.convs.append(
                 GATConv(
-                    in_channels=hidden_channels * heads,
+                    in_channels=hidden_channels * num_heads,
                     out_channels=hidden_channels,
-                    heads=heads,
+                    heads=num_heads,
                     dropout=dropout,
+                    edge_dim=edge_dim,
                     concat=True
                 )
             )
         
-        # Final layer: hidden_channels*heads -> out_channels
-        self.convs.append(
-            GATConv(
-                in_channels=hidden_channels * heads,
-                out_channels=out_channels,
-                heads=1,
-                dropout=dropout,
-                concat=False
-            )
+        # Final layer
+        self.conv_final = GATConv(
+            in_channels=hidden_channels * num_heads,
+            out_channels=out_channels,
+            heads=1,
+            dropout=dropout,
+            edge_dim=edge_dim,
+            concat=False
         )
         
-        self.dropout = dropout
-
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_weight: Optional[torch.Tensor] = None) -> torch.Tensor:
-        for conv in self.convs[:-1]:
-            x = conv(x, edge_index, edge_weight)
-            x = F.elu(x)
-            x = F.dropout(x, p=self.dropout, training=self.training)
+        # Layer normalization
+        self.norms = torch.nn.ModuleList([
+            torch.nn.LayerNorm(hidden_channels * num_heads)
+            for _ in range(num_layers - 1)
+        ])
         
-        x = self.convs[-1](x, edge_index, edge_weight)
-        return x 
+        # Skip connections
+        self.skip_connections = torch.nn.ModuleList([
+            torch.nn.Linear(hidden_channels * num_heads, hidden_channels * num_heads)
+            for _ in range(num_layers - 1)
+        ])
+        
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_attr: torch.Tensor) -> torch.Tensor:
+        # Add self-loops to edge_index
+        edge_index, edge_attr = add_self_loops(
+            edge_index,
+            edge_attr,
+            fill_value=0.0,
+            num_nodes=x.size(0)
+        )
+        
+        # Apply dropout
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        
+        # First layer
+        x, attention_weights = self.conv1(x, edge_index, edge_attr, return_attention_weights=True)
+        self.attention_weights = attention_weights  # Store attention weights
+        x = self.norms[0](x)
+        x = F.elu(x)
+        
+        # Hidden layers
+        for i in range(self.num_layers - 2):
+            # Skip connection
+            identity = self.skip_connections[i](x)
+            
+            # Apply GAT layer
+            x = self.convs[i](x, edge_index, edge_attr)
+            x = self.norms[i + 1](x)
+            x = F.elu(x)
+            
+            # Add skip connection
+            x = x + identity
+        
+        # Final layer
+        x = self.conv_final(x, edge_index, edge_attr)
+        
+        return x
+    
+    def get_attention_weights(self) -> torch.Tensor:
+        """Get attention weights from the first GAT layer."""
+        if self.attention_weights is None:
+            raise RuntimeError("Attention weights not available. Run forward pass first.")
+        return self.attention_weights 
